@@ -1,0 +1,421 @@
+---
+title: 'Data Science: Capstone Project'
+author: "Pritam Dey"
+date: "Nov 20, 2015"
+output: 
+  pdf_document: 
+    fig_height: 3
+    fig_width: 3
+documentclass: article
+classoption: a4paper
+---
+********************************************************************************************
+
+```{r echo=FALSE, results='hide', message=FALSE}
+
+library(utils)
+library(knitr)
+library(caret)
+library(randomForest)
+library(rpart)
+library(jsonlite)
+library(ggplot2)
+library(dplyr)
+suppressPackageStartupMessages(library(googleVis))
+
+```
+# Introduction
+The goal of the capstone project is to apply the data science skills that we have learned in this course, and therefore mimic the experience of being a data scientist.
+
+The specific objective of this capstone project is to analyze the Yelp data set to answer the question that I have formulated. The question that I have posed is:
+
+**What correlation can we draw between a user's attributes (e.g. no. of fans, no. of friends, no. of compliments received) and his/her review of a business? Does an active user (user with higher no.of attributes) tend to review a particular type of business more?**
+
+The rationale for choosing this question is to understand whether a user's personality (determined by his/her attributes such as no. of fans, friends, votes & compliments received) has any dependency on the type of reviews he/she provides. Lets assume that a user with lots of friends, fans and compliments is more socially-outgoing personality than a user with minimal friends. So does such people tend to visit specific types of business more (e.g. restaurants, bars, etc.), and provide more reviews to such businesses? Answering these kind of questions can help marketeers to come up with targeted marketing strategies to attract specific crowd to visit the business.
+
+# Methods and Data
+
+#### Overall Approach  
+
+My question deals with **User Attributes** and **Business Review**. I am interested in the impact of user attributes on his/her review of business. Hence I will run a regression with 'review_count' (from user dataset) as dependent (outcome) variable and other user attributes (votes, friends, fans, compliments) as independent (preditcot) variables. There is "review_count" variable in the 'user' dataset against which the prediction will be made. 
+
+The key steps of my approach are:
+
+1. I extract ONLY required columns from 'user' data set. The columns I am interested in are: user_id, review_count, average_stars, votes, friends, compliments, fans.
+2. Since 'friends' is a list of user friends (with unique user_id), I add them into total No. of friends.
+3. Similarly I add the total number of compliments and votes received.
+4. Since the size of the datasets are huge, I take a subset of 10000 complete data (rows).
+5. I them partition data into **Training** and **Testing** datasets.
+6. Against the above predictor variables, I run multi-variable regression. I run two regressions:
+    1. To check the impact of user attributes on review count (data from 'user' dataset)
+    2. Next run another regression on - User Attributes + Business Attributes vs. Business Review count 
+    (data from 'business', 'review' and 'user' datasets).
+    
+    This will tell me how much of dependency does user attributes and business attributes 
+    (individually and collectively) have on the business review.
+
+6. Next I will run the following prediction models:
+    a. Prediction model with Decision Tree (using both Training and Testing datasets)
+    b. Prediction model with Random Forest (using both Training and Testing datasets)
+7. Prove/disprove my hypothetis based on above results.
+8. Summarize the results.
+
+Below is the key data processing steps I took to perform my analysis:
+
+#### 1. Downloaded, extracted, and loaded the data (json files):
+    a. Downloaded the Yelp dataset as per the instuctions provided by the course.
+    b. There are five files in JSON format - business, review, user, checkin, and user.
+    c. I extracted the data using jsonlite package, and stored the data in data frames. 
+    I used 'flatten' functionality to flatten hierarchical structure in the data sets.
+    d. For my question scope, only 'user', 'business', and 'review' files are used. 
+    I ignored 'checkin' and 'tip' data set.
+    
+```{r, echo=FALSE, cache=TRUE}
+
+user_file <- "yelp_academic_dataset_user.json"
+review_file <- "yelp_academic_dataset_review.json"
+business_file <- "yelp_academic_dataset_business.json"
+
+#userData <- fromJSON(sprintf("[%s]", paste(readLines(user_file), collapse=",")), simplifyVector = TRUE, simplifyDataFrame = simplifyVector, simplifyMatrix = simplifyVector, flatten = TRUE, pagesize = 1000)
+#userData <- fromJSON(user_file, handler = NULL, default.size = 100, depth = 150L, allowComments = TRUE)
+
+user <- fromJSON(sprintf("[%s]", paste(readLines(user_file), collapse=",")), flatten = TRUE)
+review <- fromJSON(sprintf("[%s]", paste(readLines(review_file), collapse=",")), flatten = TRUE)
+business <- fromJSON(sprintf("[%s]", paste(readLines(business_file), collapse=",")), flatten = TRUE)
+
+```
+
+#### 2. Basic exploration of the data: 
+    a. A quick overview of the dimensions of the dataset is shown in the below table.  
+    
+```{r echo=FALSE, results='show',message=FALSE}
+
+df = data.frame(Rows=c(61184,1569264,366715,45166,495107), Columns=c(105,10,23,170,6))
+rownames(df) <- c("Business","User","Review", "Checkin", "Tip")
+knitr::kable(df, digits = 2, caption = "Dimensions of Yelp Dataset")
+
+df1 = data.frame(Rows=c(61184,1569264,366715), Columns=c(105,10,23))
+rownames(df1) <- c("Business","User","Review")
+
+barplot(df1$Rows, names = rownames(df1),
+  xlab = "Dataset name", ylab = "No. of Rows",
+  main = "Yelp Dataset Dimensions", col=c("lightblue"))
+text(0.7, 120000, df[1,1])
+text(1.9, 1500000, df[2,1])
+text(3.1, 430000, df[3,1])
+#text(4.3, 100000, df[4,1])
+#text(5.5, 600000, df[5,1])
+
+barplot(df1$Columns, names = rownames(df1),
+  xlab = "Dataset name", ylab = "No. of Columns",
+  main = "Yelp Dataset Dimensions", col=c("red"), beside=TRUE)
+text(0.7, 115, df[1,2])
+text(1.9, 20, df[2,2])
+text(3.1, 30, df[3,2])
+#text(4.3, 165, df[4,2])
+#text(5.5, 15, df[5,2])
+
+```
+    
+#### 3. Processing the Data:
+    I performed the following data processing:
+    
+1. **Imputation:** Replaced all NAs by zero  
+2. **Summation:** For user dataset, created new columns with sum of compliments, votes, friends.  
+    This helps me to consider only this summed columns for my analysis, thereby helping me to ignore 
+    20+ variables.  
+3. **Extractation:** Due to large data size, I extracted only specific columns needed for my 
+    modeling.  
+4. **Subsetting:** Due to large size of data set, I extracted 10000 rows randomly using 'subset' 
+    function. This is the final data set for my analysis.  
+5. **Merging:** I also merged 'business', 'review', and 'user' datasets since I would need these 
+    combined dataset at some point to run my regression.  
+    
+```{r, echo=FALSE, cache=TRUE}
+
+#Merging business and review data
+bus_rev <- merge (review, business, by = "business_id")
+
+#subsetting the first 22 columns as this is what is needed for my analysis
+bus_rev_subset <- bus_rev[,1:22]
+
+#Merging above with user data
+bus_rev_usr <- merge (bus_rev_subset, user, by = "user_id")
+
+dim(bus_rev) # 1569264     114
+dim(bus_rev_usr) # 1569264     44
+```
+
+```{r, echo=FALSE, cache=TRUE}
+
+# replace NA by zeros
+user[is.na(user)] <- 0
+
+user$tot_compliments <- rowSums(user[,c(13:23)])
+user$tot_votes <- rowSums(user[,c(10:12)])
+user$tot_friends <- cbind(lapply(user$friends, function(x) length(x)))
+
+# Extracting specific columns for regression
+user_trim <- user[c(2,4,6,7,24:26)]
+dim(user_trim) # 366715      7
+
+# Due to large size of data set, selecting 10000 rows randomly. This will be our final data set for analysis.
+processedTrainingData <- user_trim[sample(nrow(user_trim),10000),]
+dim(processedTrainingData)
+
+```
+#### 4. Partitioning the data:
+1. To perform the analysis, I needed to split the data into a training sample to build my model, 
+    and a separate testing data set to validate and test my model.  
+2. Since the size of training data set is very large (more than 350,000 rows for user and 
+    1.5 million for review), I made the choice to partition the data into 50:50 ratio on the 10000 
+    records that I extracted above.  
+3. After partitioning, the new data set size is: 5000 rows for training set, and 5000 rows for 
+    testing set. The number of variables have been brought down to 7.
+    
+```{r, echo=FALSE, warning=FALSE, message=FALSE, cache=TRUE}
+
+set.seed(22222)
+
+inTrain <- createDataPartition(y=processedTrainingData$review_count, p=0.50, list=FALSE)
+myTraining <- processedTrainingData[inTrain, ]
+myTesting <- processedTrainingData[-inTrain, ]
+
+dim(myTraining) # 5001   7
+dim(myTesting) # 4999   7
+
+processedTestingData <- myTesting
+
+
+# function to unlist the columns
+myFun <- function(data) {
+  ListCols <- sapply(data, is.list)
+  cbind(data[!ListCols], t(apply(data[ListCols], 1, unlist)))
+}
+
+myFun(processedTrainingData)
+myFun(processedTestingData)
+
+myTraining$fans <- as.numeric(myTraining$fans)
+myTraining$average_stars <- as.numeric(myTraining$average_stars)
+myTraining$tot_compliments <- as.numeric(myTraining$tot_compliments)
+myTraining$tot_votes <- as.numeric(myTraining$tot_votes)
+myTraining$tot_friends <- as.numeric(myTraining$tot_friends)
+
+myTesting$fans <- as.numeric(myTesting$fans)
+myTesting$average_stars <- as.numeric(myTesting$average_stars)
+myTesting$tot_compliments <- as.numeric(myTesting$tot_compliments)
+myTesting$tot_votes <- as.numeric(myTesting$tot_votes)
+myTesting$tot_friends <- as.numeric(myTesting$tot_friends)
+
+myTraining <- dplyr::tbl_df(myTraining)
+myTesting <- dplyr::tbl_df(myTesting)
+
+#Export dataset to csv for backup
+write.csv(myTraining, file ="user_train.csv",row.names=FALSE, sep=";")
+write.csv(myTesting, file ="user_test.csv",row.names=FALSE, sep=";")
+
+```
+Now Training dataset has 7002 rows and 27 variables (columns). Testing dataset has 2998 rows and 27 variables (columns).
+
+#### 5. Running the FIRST regression model with only user attributes:
+
+I ran the regression model with the following variables and got the following output:
+
+**fit0 <- lm(review_count ~ fans + average_stars + tot_compliments + tot_votes + tot_friends, data=myTraining)**
+
+```{r, echo=FALSE, cache=TRUE}
+
+fit0 <- lm(review_count ~ fans + average_stars + tot_compliments + tot_votes + tot_friends, data=myTraining)
+fit0$coefficients
+summary(fit0)$coef
+
+par(mfrow = c(2,2))
+plot(fit0)
+
+knitr::opts_chunk$set(warning=FALSE, error=FALSE, message = FALSE)
+shapiro.test(fit0$residuals)
+
+controlDTree <- trainControl(method="cv", 5)
+modelDTree <- train(review_count ~ ., data=myTraining_1, method="rf", trControl=controlDTree, ntree=50)
+modelDTree
+
+
+predictDTree <- predict(modelDTree, myTesting_1)
+confusionMatrix(myTesting_1$review_count, predictDTree)
+
+accuracy <- postResample(predictDTree, myTesting_1$review_count)
+model_accuracy <- accuracy[[1]]*100 
+model_accuracy # 5178.308
+
+```
+
+```{r, echo=FALSE, cache=TRUE}
+
+myTraining_1 <- myTraining[,-2]
+myTesting_1 <- myTesting[,-2]
+
+modelFitRf <- randomForest(review_count ~ ., data=myTraining_1, importance=TRUE, keep.forest=TRUE)
+modelFitRf
+
+# Run the prediction based upon the modFit model created and the testing data
+predictionRf<-predict(modelFitRf, myTesting_1)
+confusionMatrix(predictionRf, myTesting_1$review_count)
+
+accuracy <- postResample(predictionRf, myTesting_1$review_count)
+model_accuracy <- accuracy[[1]]*100
+model_accuracy # 5184.437
+
+# Plot the Random Forest model
+plot(modelDTree, log = "y", lwd = 2, main = "Random Forest accuracy", xlab = "Predictors", ylab = "Accuracy")
+
+# Run a varPlot to look at the importance of the variables
+varImpPlot(modelFitRf, type=2)
+
+```
+
+#### 6. Running the SECOND regression model with only user + business attributes:
+
+The above regression with only 'user attributes' could only explain about 64% of variation in the review count.
+So I run another regression that includes both 'user attributes' and 'business attributes'. The idea is review count should also depend on the business attributes such as quality of service, type of service, etc.
+
+Using the merged data as explained above (Sec 3.5), I run the following regression this time:
+
+**fit1 <- lm(review_count.y ~ stars.y + tot_attributes + fans + average_stars + tot_votes + tot_compliments + review_count.x, data=myTraining)**
+
+```{r, echo=FALSE, cache=TRUE}
+
+# let us subset the business attributes
+bus_subset <- business[, c(1,3,6,11,28:100)]
+
+# convert NA to zero
+bus_subset[is.na(bus_subset)] <- 0
+
+# unlist the dataset
+myFun(bus_subset)
+
+# convert all logical attributes to numeric
+bus_subset$open <- as.numeric(bus_subset$open)
+bus_subset$`attributes.Accepts Credit Cards` <- as.numeric(bus_subset$`attributes.Accepts Credit Cards`)
+
+
+unique(bus_subset$`attributes.Noise Level`, incomparables = FALSE)
+#"0"         "loud"      "average"   "quiet"     "very_loud"
+# giving rating based on noise level: 5 for quiet, 1 for loud
+
+bus_subset$`attributes.Noise Level` <- gsub("very_loud", "4", bus_subset$`attributes.Noise Level`)
+bus_subset$`attributes.Noise Level` <- gsub("loud", "3", bus_subset$`attributes.Noise Level`)
+bus_subset$`attributes.Noise Level` <- gsub("average", "2", bus_subset$`attributes.Noise Level`)
+bus_subset$`attributes.Noise Level` <- gsub("quiet", "1", bus_subset$`attributes.Noise Level`)
+bus_subset$`attributes.Noise Level` <- as.numeric(bus_subset$`attributes.Noise Level`)
+
+unique(bus_subset$`attributes.Attire`, incomparables = FALSE)
+# "0"      "casual" "dressy" "formal"
+bus_subset$`attributes.Attire` <- gsub("casual", "3", bus_subset$`attributes.Attire`)
+bus_subset$`attributes.Attire` <- gsub("dressy", "2", bus_subset$`attributes.Attire`)
+bus_subset$`attributes.Attire` <- gsub("formal", "1", bus_subset$`attributes.Attire`)
+bus_subset$`attributes.Attire` <- as.numeric(bus_subset$`attributes.Attire`)
+
+
+unique(bus_subset$`attributes.Smoking`, incomparables = FALSE)
+# "0"       "outdoor" "no"      "yes"    
+bus_subset$`attributes.Smoking` <- gsub("no", "1", bus_subset$`attributes.Smoking`)
+bus_subset$`attributes.Smoking` <- gsub("outdoor", "2", bus_subset$`attributes.Smoking`)
+bus_subset$`attributes.Smoking` <- gsub("yes", "3", bus_subset$`attributes.Smoking`)
+bus_subset$`attributes.Smoking` <- as.numeric(bus_subset$`attributes.Smoking`)
+
+unique(bus_subset$`attributes.Wi-Fi`, incomparables = FALSE)
+# "0"    "free" "no"   "paid"    
+bus_subset$`attributes.Wi-Fi` <- gsub("free", "3", bus_subset$`attributes.Wi-Fi`)
+bus_subset$`attributes.Wi-Fi` <- gsub("paid", "2", bus_subset$`attributes.Wi-Fi`)
+bus_subset$`attributes.Wi-Fi` <- gsub("no", "0", bus_subset$`attributes.Wi-Fi`)
+bus_subset$`attributes.Wi-Fi` <- as.numeric(bus_subset$`attributes.Wi-Fi`)
+
+unique(bus_subset$`attributes.BYOB/Corkage`, incomparables = FALSE)
+# "0"           "yes_free"    "no"          "yes_corkage"
+bus_subset$`attributes.BYOB/Corkage` <- gsub("yes_free", "3", bus_subset$`attributes.BYOB/Corkage`)
+bus_subset$`attributes.BYOB/Corkage` <- gsub("yes_corkage", "2", bus_subset$`attributes.BYOB/Corkage`)
+bus_subset$`attributes.BYOB/Corkage` <- gsub("no", "1", bus_subset$`attributes.BYOB/Corkage`)
+bus_subset$`attributes.BYOB/Corkage` <- as.numeric(bus_subset$`attributes.BYOB/Corkage`)
+
+unique(bus_subset$`attributes.Ages Allowed`, incomparables = FALSE)
+# "0"       "allages" "21plus" 
+bus_subset$`attributes.Ages Allowed` <- gsub("allages", "2", bus_subset$`attributes.Ages Allowed`)
+bus_subset$`attributes.Ages Allowed` <- gsub("21plus", "1", bus_subset$`attributes.Ages Allowed`)
+bus_subset$`attributes.Ages Allowed` <- as.numeric(bus_subset$`attributes.Ages Allowed`)
+
+bus_subset$review_count <- as.numeric(bus_subset$review_count)
+
+bus_subset$attributes.Alcohol <- as.numeric(bus_subset$attributes.Alcohol)
+
+bus_subset$`attributes.Accepts Credit Cards` <- as.numeric(bus_subset$`attributes.Accepts Credit Cards`)
+
+bus_subset$tot_attributes <- rowSums(bus_subset[,c(8:77)])
+
+unique(bus_subset$tot_attributes, incomparables = FALSE)
+# 0  2  1  5  8  4  3 11  6  7 12  9 13 10 15 16 14 19 21 17 18 20
+
+bus_subset_1 <- bus_subset[, c(1:6,78)]
+bus_subset_1$tot_attributes <- rowSums(bus_subset_1[,c(5:7)])
+bus_subset_2 <- bus_subset_1[, c(1:4,7)]
+
+# Now let us merge business, review and user data sets
+
+business_review <- merge (review, bus_subset_2, by = "business_id")
+final_data <- merge (business_review, user_trim, by = "user_id")
+dim(business_review) # 481918     14
+dim(final_data) # 481918     20
+
+# Let us subset final_data to run regression
+data_reg <- final_data[,c(12:20)]
+data_reg_1 <- data_reg[order(-data_reg$tot_attributes),]
+
+# Due to large size of data set, selecting 10000 rows randomly. This will be our final data set for analysis.
+data_reg_2 <- data_reg_1[sample(nrow(data_reg_1),10000),]
+dim(data_reg_2) # 10000     9
+
+View(data_reg_2)
+data_reg_2 <- data_reg_2[,c(1:7,9)]
+data_reg_2 <- dplyr::tbl_df(data_reg_2)
+
+fit1 <- lm(review_count.y ~ stars.y + tot_attributes + fans + average_stars + tot_votes + tot_compliments + review_count.x, data=data_reg_2)
+fit1$coefficients
+```
+
+The output of the two regressions models is shown below:
+
+![alt text](Regression-Output.png)
+
+![alt text](RegressionPlot1.png)  
+The plot above indicate that the residuals are NOT normally distributed and homoskedastic.
+
+#### 7. Building the prediction model:
+    a. I chose to build my model using two approaches: **Decision Tree** and **Random Forest**  
+# Results
+
+1. In Regression Model 1, Adjusted R-Square is 63.66% and p-value is less than 0.05.
+2. In Regression Model 2, Adjusted R-Square is 60.18% and p-value is less than 0.05.
+3. 95% confidence interval shows there is no zero.
+4. Regression Model 1 shows that there is some relationship between review_count and user attributes.
+5. Regression Model 2 shows that there is some relationship between review_count vs. user attributes **&** business attributes.
+6. In combination of these two models, R-square value indicates that about **64% of the variation in business review can be explained by various user and business attributes**.
+7. Using Decision Tree, I got accuracy of 52.00% and out of sample error of 0.12% (1-0.9888)
+8. Using Random Forest, I got accuracy of 52.00% and out of sample error of 0.08% (1-0.9992)
+9. As compared to prediction with Decision Tree, prediction with Random Tree yielded better accuracy percentage, and low out of sample error. The difference between the two models is marginal; nevertheless Random Tree provided slightly better prediction result. Hence I chose Random Forest model for my further prediction.
+
+# Final Result
+
+**Primary Question:** What correlation can we draw between a user's attributes (e.g. no. of fans, no. of friends, no. of compliments received) and his/her review of a business? Does an active user (user with higher no. of attributes) tend to review a particular type of business more?
+
+**Conclusion: Regression output shows there is some correlation between a user's attributes and his/her review of a business.**
+
+# Discussion
+
+The various attributes of the user explains for 64% for the variation (Regression 1) in his/her review of the business. 
+That the value of adjusted R-square is low is along expected lines because intuitively we expect the business review to depend largely on the quality and type of business service, and not only on user attributes. That a user's attributes plays a significant role in the review process should be a good marketing input to the business. It basically means that user's friends circle, and his positive ratings plays a role in how he review a business. This is not surprising as our social ecosystem plays a big role in our behavior.
+
+What is indeed surprising is that the adjusted R-square did not improve much in Regression 2 as well. I think this could be because of the underlying data. I factored only business attributes such as smoking facilities, Wi-Fi presence, Credit Card, Noise Level, Attire, etc.  The regression output shows these attributes do not experience much or none at all. What ultimately should matter is the user experience of consuming the business service. This is a subjective experience and may not have been captured adequately in the datasets provided.
+
+********************************************************************************************
+The R code for the markdown file is available at: https://github.com/pdey6/Capstone_Project/
+
