@@ -1,0 +1,29 @@
+---
+title: "Data Science Capstone"
+author: "Pritam Dey"
+date: "November 20, 2015"
+output: ioslides_presentation
+widescreen: true
+smaller: true
+css: styles.css
+logo: logo_big.png
+fig_width: 7
+fig_height: 4
+---
+
+## Primary Question of Interest | Question/Problem and the Rationale for Studying it  {#nextsteps .emphasized}
+
+![Image](Slide-1.png)
+
+## Methodology Used {#nextsteps .emphasized}
+
+![Image](Slide-2.png)
+
+## Regression Modeling & Output {#nextsteps .emphasized}
+I ran the regression model with the following variables and got the following output:
+
+![Image](Slide-3.png)
+
+## Conclusion & Discussion {#nextsteps .emphasized}
+
+![Image](Slide-5.png)
